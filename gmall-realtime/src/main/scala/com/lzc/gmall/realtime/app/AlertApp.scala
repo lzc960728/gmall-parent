@@ -3,7 +3,7 @@ package com.lzc.gmall.realtime.app
 import com.alibaba.fastjson.JSON
 import com.lzc.gmall.common.GmallConstants
 import com.lzc.gmall.realtime.bean.{CouponAlertInfo, EventInfo}
-import com.lzc.gmall.realtime.util.MyKafkaUtil
+import com.lzc.gmall.realtime.util.{EsUtil, MyKafkaUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
@@ -89,23 +89,24 @@ object AlertApp {
     //          rdd => println(rdd.collect().mkString("\n"))
     //        }
 
-    //    (true,CouponAlertInfo(mid_34,[110, 137, 58],[33, 3, 26, 49, 28, 7, 31, 20, 32],[addComment, addFavor, coupon, addComment, addComment, addFavor, coupon, coupon, addCart, coupon, coupon, addFavor, addComment, coupon, coupon, addComment, addCart, addCart, addCart, coupon, coupon, coupon],1583927285162))
-    //    (true,CouponAlertInfo(mid_7,[100, 181, 36, 124, 29],[0, 44, 34, 1, 45, 23, 47, 14, 8, 41, 10],[addCart, addCart, addFavor, addComment, coupon, addCart, addCart, addCart, addComment, coupon, coupon, coupon, coupon, coupon, addComment, addCart, addComment, coupon, coupon, coupon, addComment, coupon, addCart, coupon, coupon, addFavor, coupon, addCart, addComment, addCart, coupon, addCart, addCart, addCart, addCart, addComment, addCart],1583927285162))
-    //    (false,CouponAlertInfo(mid_23,[194, 152],[23, 20, 32],[addCart, addFavor, addComment, coupon, coupon, addCart, addFavor, coupon, addCart],1583927285162))
-    //    (true,CouponAlertInfo(mid_12,[42, 25, 58],[22, 35, 24, 3, 37, 15, 19],[addComment, coupon, addFavor, coupon, coupon, addComment, addComment, addCart, addComment, addCart, addCart, addComment, addCart, coupon, addFavor, addFavor, coupon, coupon, addComment, coupon, coupon, coupon],1583927285162))
-    //    (true,CouponAlertInfo(mid_13,[169, 127, 18],[22, 45, 1, 13, 47, 49, 39],[coupon, addCart, coupon, addFavor, addCart, coupon, addCart, addCart, addCart, addComment, coupon, coupon, coupon, addComment, addCart, coupon],1583927285175))
 
     // 5. 多变少 groupbykey filter
     val alterDStream: DStream[CouponAlertInfo] = checkDStream.filter(_._1).map(_._2)
 
 
-    //    CouponAlertInfo(mid_34,[110, 137, 58],[33, 3, 26, 49, 28, 7, 31, 20, 32],[addComment, addFavor, coupon, addComment, addComment, addFavor, coupon, coupon, addCart, coupon, coupon, addFavor, addComment, coupon, coupon, addComment, addCart, addCart, addCart, coupon, coupon, coupon],1583927285196)
-    //    CouponAlertInfo(mid_7,[100, 181, 36, 124, 29],[0, 44, 34, 1, 45, 23, 47, 14, 8, 41, 10],[addCart, addCart, addFavor, addComment, coupon, addCart, addCart, addCart, addComment, coupon, coupon, coupon, coupon, coupon, addComment, addCart, addComment, coupon, coupon, coupon, addComment, coupon, addCart, coupon, coupon, addFavor, coupon, addCart, addComment, addCart, coupon, addCart, addCart, addCart, addCart, addComment, addCart],1583927285196)
-    //    CouponAlertInfo(mid_12,[42, 25, 58],[22, 35, 24, 3, 37, 15, 19],[addComment, coupon, addFavor, coupon, coupon, addComment, addComment, addCart, addComment, addCart, addCart, addComment, addCart, coupon, addFavor, addFavor, coupon, coupon, addComment, coupon, coupon, coupon],1583927285196)
-    //    CouponAlertInfo(mid_13,[169, 127, 18],[22, 45, 1, 13, 47, 49, 39],[coupon, addCart, coupon, addFavor, addCart, coupon, addCart, addCart, addCart, addComment, coupon, coupon, coupon, addComment, addCart, coupon],1583927285197)
-    //    CouponAlertInfo(mid_35,[169, 183, 28, 86],[33, 35, 24, 18, 8, 40, 30, 21],[addFavor, addCart, addCart, addComment, addCart, coupon, addComment, addComment, coupon, addFavor, coupon, addCart, addFavor, coupon, coupon, coupon, coupon, coupon, addComment],1583927285197)
-
-
+    // 6. 保存到ES中
+    alterDStream.foreachRDD {
+      rdd: RDD[CouponAlertInfo] =>
+        rdd.foreachPartition {
+          alertItr => {
+            val list: List[CouponAlertInfo] = alertItr.toList
+            // 提取主键mid + 分钟 组合为主键,在利用组合主键去重
+            val tuples = list.map(alertInfo => (alertInfo.mid + "_" + alertInfo.ts / 1000 / 60, alertInfo))
+            // 批量保存
+            EsUtil.indexBulk(GmallConstants.ES_INDEX_ALERT,tuples)
+          }
+        }
+    }
     ssc.start()
     ssc.awaitTermination()
   }
